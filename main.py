@@ -19,7 +19,7 @@ app = FastAPI(title="Sales Prediction", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080/"],
+    allow_origins=["http://localhost:8080"],
     allow_credentials=True,
     allow_headers=["*"],
     allow_methods=["*"]
@@ -27,6 +27,7 @@ app.add_middleware(
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
+# LOAD ENV VARIABLES
 load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
@@ -54,7 +55,24 @@ async def read_user_me(conn: Session = Depends(get_db), token: str = Depends(oau
 
 @app.post("/api/user/register", tags=["Users"], response_model=schemas.UserResponse)
 async def create_user(user: schemas.UserCreate, conn: Session = Depends(get_db)):
+    if crud.get_user_by_email(conn, user.email):
+        raise HTTPException(409, "Email already in use")
+
     return crud.insert_user(conn, user)
+
+@app.put("/api/user/edit_profile", response_model=schemas.UserResponse)
+async def edit_profile(user: schemas.UserResponse, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    payload = verify_token(token)
+
+    edited_user = crud.update_user(conn, user)
+
+    return schemas.UserResponse(
+        user_id=edited_user.user_id,
+        email=edited_user.email,
+        nama_lengkap=edited_user.nama_lengkap,
+        nama_toko=edited_user.nama_toko,
+        role=edited_user.role
+    )
 
 # AUTHENTICATION
 def hash_password(password):
