@@ -36,7 +36,7 @@ SALT = os.getenv("SALT").encode('utf-8')
 # ROOT
 @app.get("/api/", tags=["Root"])
 async def index():
-    return {"message": "Sales Prediction BE"}
+    return {"message": "Sales Predictor BE"}
 
 # USERS
 @app.get("/api/user/me", tags=["Users"], response_model=schemas.UserResponse)
@@ -56,7 +56,7 @@ async def read_user_me(conn: Session = Depends(get_db), token: str = Depends(oau
 @app.post("/api/user/register", tags=["Users"], response_model=schemas.UserResponse)
 async def create_user(user: schemas.UserCreate, conn: Session = Depends(get_db)):
     if crud.get_user_by_email(conn, user.email):
-        raise HTTPException(409, "Email already in use")
+        raise HTTPException(409, "Email sudah digunakan")
 
     return crud.insert_user(conn, user)
 
@@ -64,7 +64,12 @@ async def create_user(user: schemas.UserCreate, conn: Session = Depends(get_db))
 async def edit_profile(user: schemas.UserResponse, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
     payload = verify_token(token)
 
-    edited_user = crud.update_user(conn, user)
+    db_user = crud.get_user_by_id(conn, user.user_id)
+
+    if not db_user:
+        raise HTTPException(400, "User tidak ditemukan")
+
+    edited_user = crud.update_user(conn, db_user, user)
 
     return schemas.UserResponse(
         user_id=edited_user.user_id,
@@ -73,6 +78,41 @@ async def edit_profile(user: schemas.UserResponse, conn: Session = Depends(get_d
         nama_toko=edited_user.nama_toko,
         role=edited_user.role
     )
+
+@app.put("/api/user/change_password", response_model=schemas.UserResponse)
+async def change_password(user: schemas.UserChangePassword, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    payload = verify_token(token)
+
+    db_user = crud.get_user_by_id(conn, user.user_id)
+
+    if not db_user:
+        raise HTTPException(400, "User tidak ditemukan")
+    
+    if db_user.password != hash_password(user.password):
+        return HTTPException(401, "Password tidak cocok")
+
+    edited_user = crud.update_password(conn, db_user, hash_password(user.new_password))
+
+    return schemas.UserResponse(
+        user_id=edited_user.user_id,
+        email=edited_user.email,
+        nama_lengkap=edited_user.nama_lengkap,
+        nama_toko=edited_user.nama_toko,
+        role=edited_user.role
+    )
+
+@app.delete("/api/user/{user_id}/delete")
+async def delete_account(user_id: int, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    payload = verify_token(token)
+
+    db_user = crud.get_user_by_id(conn, user_id)
+
+    if not db_user:
+        raise HTTPException(400, "User tidak ditemukan")
+    
+    result = crud.delete_user(conn, db_user)
+
+    return result
 
 # AUTHENTICATION
 def hash_password(password):

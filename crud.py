@@ -7,6 +7,9 @@ import bcrypt, os
 def get_user_by_email(db: Session, email: str):
     return db.query(models.User).filter(models.User.email == email).first()
 
+def get_user_by_id(db: Session, user_id: str):
+    return db.query(models.User).filter(models.User.user_id == user_id).first()
+
 def hash_password(password):
     load_dotenv()
     SALT = os.getenv("SALT").encode('utf-8')
@@ -29,12 +32,7 @@ def insert_user(db: Session, user: schemas.UserCreate):
     
     return db_user
 
-def update_user(db: Session, user: schemas.UserResponse):
-    db_user = db.query(models.User).filter(models.User.user_id == user.user_id).first()
-
-    if not db_user:
-        return None
-    
+def update_user(db: Session, db_user: models.User, user: schemas.UserResponse):
     db_user.email = user.email
     db_user.nama_lengkap = user.nama_lengkap
     db_user.nama_toko = user.nama_toko
@@ -43,3 +41,18 @@ def update_user(db: Session, user: schemas.UserResponse):
     db.refresh(db_user)
 
     return db_user
+
+def update_password(db: Session, db_user: models.User, hashed_password: str):
+    db_user.password = hashed_password
+
+    db.commit()
+    db.refresh(db_user)
+
+    return db_user
+
+def delete_user(db: Session, db_user: models.User):
+
+    db.delete(db_user)
+    db.commit()
+
+    return {"message": "success"}

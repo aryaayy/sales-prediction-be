@@ -11,6 +11,10 @@ class UserCreate(UserLogin):
     nama_lengkap: str
     role: str
 
+class UserChangePassword(UserLogin):
+    user_id: int
+    new_password: str
+
 class UserResponse(UserBase):
     user_id: int
     nama_lengkap: str
