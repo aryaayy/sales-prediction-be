@@ -1,3 +1,4 @@
+from sqlalchemy import func, case
 from sqlalchemy.orm import Session
 import models, schemas
 from dotenv import load_dotenv
@@ -56,3 +57,23 @@ def delete_user(db: Session, db_user: models.User):
     db.commit()
 
     return {"message": "success"}
+
+# DATASET
+def get_sales(db: Session, user_id: int):
+    return db.query(models.Sale).filter(models.Sale.user_id == user_id).all()
+
+def get_sales_summary(db: Session, user_id: int):
+    result = db.query(
+        func.count(models.Sale.sale_id).label("total_transaksi"),
+        func.count(func.distinct(models.Sale.nama_produk)).label("total_produk"),
+        func.sum(case((models.Sale.status_terakhir == "Pesanan Selesai", 1), else_=0)).label("total_status_selesai"),
+        func.sum(case((models.Sale.status_terakhir.like("Dibatalkan%"), 1), else_=0)).label("total_status_dibatalkan"),
+        func.sum(case((models.Sale.status_terakhir == "Dibatalkan Pembeli", 1), else_=0)).label("total_status_dibatalkan_pembeli"),
+        func.sum(case((models.Sale.status_terakhir == "Dibatalkan Penjual", 1), else_=0)).label("total_status_dibatalkan_penjual"),
+        func.sum(case((models.Sale.status_terakhir == "Dibatalkan Sistem", 1), else_=0)).label("total_status_dibatalkan_sistem"),
+        func.sum(case((models.Sale.status_terakhir == "Sedang Dikirim", 1), else_=0)).label("total_status_sedang_dikirim"),
+        func.min(models.Sale.tanggal_pembayaran).label("periode_awal"),
+        func.max(models.Sale.tanggal_pembayaran).label("periode_akhir")
+    ).filter(models.Sale.user_id == user_id).one()
+
+    return result

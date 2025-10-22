@@ -1,7 +1,10 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 
+import pandas as pd
+import numpy as np
+from io import StringIO
 from sqlalchemy.orm import Session
 from database import get_db
 
@@ -10,12 +13,12 @@ from jose import jwt, JWTError
 
 import os
 from dotenv import load_dotenv
-import schemas
-import crud
+import schemas, crud, models
+
 
 from datetime import datetime, timedelta, timezone
 
-app = FastAPI(title="Sales Prediction", version="1.0.0")
+app = FastAPI(title="Sales Predictor", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,8 +41,8 @@ SALT = os.getenv("SALT").encode('utf-8')
 async def index():
     return {"message": "Sales Predictor BE"}
 
-# USERS
-@app.get("/api/user/me", tags=["Users"], response_model=schemas.UserResponse)
+# USER
+@app.get("/api/user/me", tags=["User"], response_model=schemas.UserResponse)
 async def read_user_me(conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
     payload = verify_token(token)
 
@@ -53,14 +56,14 @@ async def read_user_me(conn: Session = Depends(get_db), token: str = Depends(oau
         role=user.role
     )
 
-@app.post("/api/user/register", tags=["Users"], response_model=schemas.UserResponse)
+@app.post("/api/user/register", tags=["User"], response_model=schemas.UserResponse)
 async def create_user(user: schemas.UserCreate, conn: Session = Depends(get_db)):
     if crud.get_user_by_email(conn, user.email):
         raise HTTPException(409, "Email sudah digunakan")
 
     return crud.insert_user(conn, user)
 
-@app.put("/api/user/edit_profile", response_model=schemas.UserResponse)
+@app.put("/api/user/edit_profile", tags=["User"], response_model=schemas.UserResponse)
 async def edit_profile(user: schemas.UserResponse, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
     payload = verify_token(token)
 
@@ -79,7 +82,7 @@ async def edit_profile(user: schemas.UserResponse, conn: Session = Depends(get_d
         role=edited_user.role
     )
 
-@app.put("/api/user/change_password", response_model=schemas.UserResponse)
+@app.put("/api/user/change_password", tags=["User"], response_model=schemas.UserResponse)
 async def change_password(user: schemas.UserChangePassword, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
     payload = verify_token(token)
 
@@ -101,7 +104,7 @@ async def change_password(user: schemas.UserChangePassword, conn: Session = Depe
         role=edited_user.role
     )
 
-@app.delete("/api/user/{user_id}/delete")
+@app.delete("/api/user/{user_id}/delete", tags=["User"])
 async def delete_account(user_id: int, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
     payload = verify_token(token)
 
@@ -113,6 +116,57 @@ async def delete_account(user_id: int, conn: Session = Depends(get_db), token: s
     result = crud.delete_user(conn, db_user)
 
     return result
+
+# DATASET
+@app.post("/api/sales/upload", tags=["Dataset"])
+async def upload_sales(file: UploadFile = File(...), conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    payload = verify_token(token)
+
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(400, detail="File format not supported")
+
+    try:
+        contents = (await file.read()).decode("utf-8")
+        df = pd.read_csv(StringIO(contents))
+    except Exception as e:
+        raise HTTPException(400, detail=f"Failed reading file: {str(e)}")
+    
+    df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace("[()]", "", regex=True)
+    df = df.replace({np.nan: None, pd.NaT: None})
+    df = df.dropna(how="all")
+    
+    user = crud.get_user_by_email(conn, payload["email"])
+
+    df["tanggal_pembayaran"] = pd.to_datetime(df["tanggal_pembayaran"], errors="coerce")
+    df["user_id"] = user.user_id
+
+    try:
+        records = df.to_dict(orient="records")
+        conn.bulk_insert_mappings(models.Sale, records)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(500, detail=f"Database insertion failed: {str(e)}")
+    
+    return {"message": f"Successfully uploaded {len(df)} rows of sales data"}
+
+@app.get("/api/sales/summary/{user_id}", tags=["Dataset"], response_model=schemas.DataSummaryResponse)
+async def summarize_sales(user_id: int, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    payload = verify_token(token)
+
+    sales = crud.get_sales_summary(conn, user_id)
+
+    return schemas.DataSummaryResponse(
+        total_transaksi=sales.total_transaksi,
+        total_produk=sales.total_produk,
+        periode_awal=sales.periode_awal,
+        periode_akhir=sales.periode_akhir,
+        total_status_selesai=sales.total_status_selesai,
+        total_status_dibatalkan=sales.total_status_dibatalkan,
+        total_status_dibatalkan_pembeli=sales.total_status_dibatalkan_pembeli,
+        total_status_dibatalkan_penjual=sales.total_status_dibatalkan_penjual,
+        total_status_dibatalkan_sistem=sales.total_status_dibatalkan_sistem,
+    )
 
 # AUTHENTICATION
 def hash_password(password):
