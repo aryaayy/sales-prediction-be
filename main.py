@@ -166,6 +166,7 @@ async def summarize_sales(user_id: int, conn: Session = Depends(get_db), token: 
         total_status_dibatalkan_pembeli=sales.total_status_dibatalkan_pembeli,
         total_status_dibatalkan_penjual=sales.total_status_dibatalkan_penjual,
         total_status_dibatalkan_sistem=sales.total_status_dibatalkan_sistem,
+        total_status_sedang_dikirim=sales.total_status_sedang_dikirim,
     )
 
 # AUTHENTICATION
