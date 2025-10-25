@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from typing import Optional
 from datetime import datetime
 
 # USER
@@ -28,12 +29,13 @@ class UserResponse(UserBase):
 # DATASET
 class SalesDataResponse(BaseModel):
     sale_id: int
-    tgl_pembayaran: datetime
-    status_terakhir: str
-    nama_produk: str
-    jml_produk_dibeli: int
-    harga_jual_idr: int
-    total_penjualan_idr: int
+    invoice: Optional[str] = None
+    tanggal_pembayaran: Optional[datetime] = None
+    status_terakhir: Optional[str] = None
+    nama_produk: Optional[str] = None
+    jumlah_produk_dibeli: Optional[int] = None
+    harga_jual_idr: Optional[int] = None
+    total_penjualan_idr: Optional[int] = None
 
     class Config:
         orm_mode = True

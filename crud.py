@@ -1,4 +1,4 @@
-from sqlalchemy import func, case
+from sqlalchemy import func, case, extract, not_, or_
 from sqlalchemy.orm import Session
 import models, schemas
 from dotenv import load_dotenv
@@ -59,8 +59,23 @@ def delete_user(db: Session, db_user: models.User):
     return {"message": "success"}
 
 # DATASET
-def get_sales(db: Session, user_id: int):
-    return db.query(models.Sale).filter(models.Sale.user_id == user_id).all()
+def get_sales(db: Session, user_id: int, limit: int, offset: int, year: str, status: str):
+    if year == "all" and status == "all":
+        return db.query(models.Sale).filter(models.Sale.user_id == user_id).limit(limit).offset(offset)
+    
+    if year == "all" and status != "others":
+        return db.query(models.Sale).filter(models.Sale.user_id == user_id, models.Sale.status_terakhir == status).limit(limit).offset(offset)
+    
+    if year == "all" and status == "others":
+        return db.query(models.Sale).filter(models.Sale.user_id == user_id, or_(not_(models.Sale.status_terakhir.in_(["Pesanan Selesai", "Dibatalkan Penjual", "Dibatalkan Pembeli", "Dibatalkan Sistem", "Sedang Dikirim"])), models.Sale.status_terakhir.is_(None))).limit(limit).offset(offset)
+    
+    if status == "all":
+        return db.query(models.Sale).filter(models.Sale.user_id == user_id, extract("year", models.Sale.tanggal_pembayaran) == year).limit(limit).offset(offset)
+    
+    if status == "others":
+        return db.query(models.Sale).filter(models.Sale.user_id == user_id, extract("year", models.Sale.tanggal_pembayaran) == year, or_(not_(models.Sale.status_terakhir.in_(["Pesanan Selesai", "Dibatalkan Penjual", "Dibatalkan Pembeli", "Dibatalkan Sistem", "Sedang Dikirim"])), models.Sale.status_terakhir.is_(None))).limit(limit).offset(offset)
+
+    return db.query(models.Sale).filter(models.Sale.user_id == user_id, extract("year", models.Sale.tanggal_pembayaran) == year, models.Sale.status_terakhir == status).limit(limit).offset(offset)
 
 def get_sales_summary(db: Session, user_id: int):
     result = db.query(
@@ -77,3 +92,21 @@ def get_sales_summary(db: Session, user_id: int):
     ).filter(models.Sale.user_id == user_id).one()
 
     return result
+
+def count_fetch_filter(db: Session, user_id: int, year: str, status: str):
+    if year == "all" and status == "all":
+        return db.query(func.count(models.Sale.sale_id).label("rows")).filter(models.Sale.user_id == user_id).one()
+    
+    if year == "all" and status != "others":
+        return db.query(func.count(models.Sale.sale_id).label("rows")).filter(models.Sale.user_id == user_id, models.Sale.status_terakhir == status).one()
+    
+    if year == "all" and status == "others":
+        return db.query(func.count(models.Sale.sale_id).label("rows")).filter(models.Sale.user_id == user_id, or_(not_(models.Sale.status_terakhir.in_(["Pesanan Selesai", "Dibatalkan Penjual", "Dibatalkan Pembeli", "Dibatalkan Sistem", "Sedang Dikirim"])), models.Sale.status_terakhir.is_(None))).one()
+    
+    if status == "all":
+        return db.query(func.count(models.Sale.sale_id).label("rows")).filter(models.Sale.user_id == user_id, extract("year", models.Sale.tanggal_pembayaran) == year).one()
+    
+    if status == "others":
+        return db.query(func.count(models.Sale.sale_id).label("rows")).filter(models.Sale.user_id == user_id, extract("year", models.Sale.tanggal_pembayaran) == year, or_(not_(models.Sale.status_terakhir.in_(["Pesanan Selesai", "Dibatalkan Penjual", "Dibatalkan Pembeli", "Dibatalkan Sistem", "Sedang Dikirim"])), models.Sale.status_terakhir.is_(None))).one()
+
+    return db.query(func.count(models.Sale.sale_id).label("rows")).filter(models.Sale.user_id == user_id, extract("year", models.Sale.tanggal_pembayaran) == year, models.Sale.status_terakhir == status).one()

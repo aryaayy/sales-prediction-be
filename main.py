@@ -169,6 +169,33 @@ async def summarize_sales(user_id: int, conn: Session = Depends(get_db), token: 
         total_status_sedang_dikirim=sales.total_status_sedang_dikirim,
     )
 
+@app.get("/api/sales/{user_id}", tags=["Dataset"])
+async def my_sales(user_id: int, limit: int = 10, offset: int = 0, year: str = "all", status: str = "all", conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    payload = verify_token(token)
+
+    sales_response = crud.get_sales(conn, user_id, limit, offset, year, status)
+
+    sales: schemas.SalesDataResponse = []
+
+    for row in sales_response:
+        sales.append(schemas.SalesDataResponse(
+            sale_id=row.sale_id,
+            invoice=row.invoice,
+            tanggal_pembayaran=row.tanggal_pembayaran,
+            status_terakhir=row.status_terakhir,
+            nama_produk=row.nama_produk,
+            jumlah_produk_dibeli=row.jumlah_produk_dibeli,
+            harga_jual_idr=row.harga_jual_idr,
+            total_penjualan_idr=row.total_penjualan_idr
+        ))
+
+    rows_count = crud.count_fetch_filter(conn, user_id, year, status)
+
+    return {
+        "dataset": sales,
+        "rows": rows_count.rows
+    }
+
 # AUTHENTICATION
 def hash_password(password):
     byte_password = password.encode('utf-8')

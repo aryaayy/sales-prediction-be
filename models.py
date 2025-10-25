@@ -16,6 +16,7 @@ class Sale(Base):
     __tablename__ = "sales"
 
     sale_id = Column(Integer, primary_key=True, autoincrement="auto")
+    invoice = Column(String, nullable=True, index=True)
     tanggal_pembayaran = Column(DateTime, nullable=True, index=True)
     status_terakhir = Column(String(255), nullable=True, index=True)
     nama_produk = Column(String(255), nullable=True, index=True)
