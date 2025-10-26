@@ -196,6 +196,95 @@ async def my_sales(user_id: int, limit: int = 10, offset: int = 0, year: str = "
         "rows": rows_count.rows
     }
 
+# TOP PRODUCTS
+@app.get("/api/top_products/{user_id}", tags=["Top Products"], response_model=list[schemas.TopProductsResponse])
+async def my_top_products(user_id: int, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    payload = verify_token(token)
+
+    result = crud.get_top_products(conn, user_id)
+
+    top_products: schemas.TopProductsResponse = []
+
+    for row in result:
+        top_products.append(schemas.TopProductsResponse(
+            nama_produk=row.nama_produk,
+            total_unit_terjual=row.total_unit_terjual,
+            total_transaksi=row.total_transaksi,
+            total_penjualan=row.total_penjualan,
+        ))
+
+    return top_products
+
+@app.get("/api/top_products/summary/{user_id}", tags=["Top Products"], response_model=schemas.TopProductsSummaryResponse)
+async def my_top_products_summary(user_id: int, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    payload = verify_token(token)
+
+    result = crud.get_top_products_summary(conn, user_id)
+
+    return schemas.TopProductsSummaryResponse(
+        total_penjualan_top=result.total_penjualan_top,
+        total_unit_terjual_top=result.total_unit_terjual_top
+    )
+
+# STATISTICS
+@app.get("/api/statistics/monthly_trend/{user_id}", tags=["Statistics"], response_model=list[schemas.SalesTrendResponse])
+async def my_monthly_trend(user_id: int, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    payload = verify_token(token)
+
+    result = list(crud.get_monthly_sales_trend(conn, user_id))
+
+    trends: schemas.SalesTrendResponse = []
+
+    is_first = True
+    prev_total_penjualan = -1
+    for row in reversed(result):
+        difference = ((row.total_penjualan-prev_total_penjualan)/prev_total_penjualan)*100
+        prev_total_penjualan = row.total_penjualan
+
+        if is_first:
+            is_first = False
+            continue
+
+        trends.append(schemas.SalesTrendResponse(
+            bulan_pembayaran=row.bulan_pembayaran,
+            tahun_pembayaran=row.tahun_pembayaran,
+            total_penjualan=row.total_penjualan,
+            pertumbuhan=difference
+        ))
+
+    return trends
+
+@app.get("/api/statistics/transaction_analysis/{user_id}", tags=["Statistics"], response_model=schemas.TransactionAnalysisResponse)
+async def my_transaction_analysis(user_id: int, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    payload = verify_token(token)
+
+    result = crud.get_transaction_analysis(conn, user_id)
+
+    return schemas.TransactionAnalysisResponse(
+        avg_penjualan=result.avg_penjualan,
+        max_penjualan=result.max_penjualan,
+        min_penjualan=result.min_penjualan,
+        median_penjualan=result.median_penjualan,
+        std_penjualan=result.std_penjualan
+    )
+
+@app.get("/api/statistics/temporal_pattern/{user_id}", tags=["Statistics"], response_model=schemas.TemporalPatternResponse)
+async def my_temporal_pattern(user_id: int, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    payload = verify_token(token)
+
+    day = crud.get_temporal_day(conn, user_id)
+    month = crud.get_temporal_month(conn, user_id)
+    time_range = crud.get_temporal_time_range(conn, user_id)
+
+    return schemas.TemporalPatternResponse(
+        hari_transaksi=day.hari_transaksi,
+        jumlah_transaksi_hari=day.jumlah_transaksi_hari,
+        bulan_transaksi=month.bulan_transaksi,
+        jumlah_transaksi_bulan=month.jumlah_transaksi_bulan,
+        rentang_jam_transaksi=time_range.rentang_jam_transaksi,
+        jumlah_transaksi_jam=time_range.jumlah_transaksi_jam,
+    )
+
 # AUTHENTICATION
 def hash_password(password):
     byte_password = password.encode('utf-8')

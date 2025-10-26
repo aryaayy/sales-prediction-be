@@ -55,6 +55,54 @@ class DataSummaryResponse(BaseModel):
     class Config:
         orm_mode = True
 
+# TOP PRODUCTS
+class TopProductsResponse(BaseModel):
+    nama_produk: str
+    total_unit_terjual: int
+    total_transaksi: int
+    total_penjualan: int
+
+    class Config:
+        orm_mode = True
+
+class TopProductsSummaryResponse(BaseModel):
+    total_penjualan_top: int
+    total_unit_terjual_top: int
+
+    class Config:
+        orm_mode = True
+
+# SALES TREND
+class SalesTrendResponse(BaseModel):
+    bulan_pembayaran: int
+    tahun_pembayaran: int
+    total_penjualan: int
+    pertumbuhan: float
+
+    class Config:
+        orm_mode = True
+
+class TransactionAnalysisResponse(BaseModel):
+    avg_penjualan: float
+    max_penjualan: int
+    min_penjualan: int
+    median_penjualan: int
+    std_penjualan: float
+
+    class Config:
+        orm_mode = True
+
+class TemporalPatternResponse(BaseModel):
+    hari_transaksi: int
+    jumlah_transaksi_hari: int
+    bulan_transaksi: int
+    jumlah_transaksi_bulan: int
+    rentang_jam_transaksi: str
+    jumlah_transaksi_jam: int
+
+    class Config:
+        orm_mode = True
+
 # TOKEN
 class Token(BaseModel):
     access_token: str

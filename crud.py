@@ -1,4 +1,4 @@
-from sqlalchemy import func, case, extract, not_, or_
+from sqlalchemy import func, case, extract, not_, or_, select, desc
 from sqlalchemy.orm import Session
 import models, schemas
 from dotenv import load_dotenv
@@ -110,3 +110,109 @@ def count_fetch_filter(db: Session, user_id: int, year: str, status: str):
         return db.query(func.count(models.Sale.sale_id).label("rows")).filter(models.Sale.user_id == user_id, extract("year", models.Sale.tanggal_pembayaran) == year, or_(not_(models.Sale.status_terakhir.in_(["Pesanan Selesai", "Dibatalkan Penjual", "Dibatalkan Pembeli", "Dibatalkan Sistem", "Sedang Dikirim"])), models.Sale.status_terakhir.is_(None))).one()
 
     return db.query(func.count(models.Sale.sale_id).label("rows")).filter(models.Sale.user_id == user_id, extract("year", models.Sale.tanggal_pembayaran) == year, models.Sale.status_terakhir == status).one()
+
+# TOP PRODUCTS
+def get_top_products_summary(db: Session, user_id: int):
+    subquery = (
+        select(
+            models.Sale.nama_produk,
+            func.sum(models.Sale.total_penjualan_idr).label("sum_penjualan"),
+            func.sum(models.Sale.jumlah_produk_dibeli).label("sum_dibeli"),
+        )
+        .where(models.Sale.user_id == user_id)
+        .group_by(models.Sale.nama_produk)
+        .order_by(desc("sum_penjualan"))
+        .limit(10)
+    ).subquery("top_10")
+
+    summary_query = select(
+        func.sum(subquery.c.sum_penjualan).label("total_penjualan_top"),
+        func.sum(subquery.c.sum_dibeli).label("total_unit_terjual_top"),
+    )
+
+    return db.execute(summary_query).fetchone()
+
+def get_top_products(db: Session, user_id: int):
+    return db.query(
+        models.Sale.nama_produk.label("nama_produk"),
+        func.count(models.Sale.sale_id).label("total_transaksi"),
+        func.sum(models.Sale.total_penjualan_idr).label("total_penjualan"),
+        func.sum(models.Sale.jumlah_produk_dibeli).label("total_unit_terjual"),
+    ).filter(models.Sale.user_id == user_id).group_by("nama_produk").order_by(desc("total_penjualan")).limit(10)
+
+# STATISTICS
+def get_monthly_sales_trend(db: Session, user_id: int):
+    return db.query(
+        func.month(models.Sale.tanggal_pembayaran).label("bulan_pembayaran"),
+        func.year(models.Sale.tanggal_pembayaran).label("tahun_pembayaran"),
+        func.sum(models.Sale.total_penjualan_idr).label("total_penjualan")
+    ).filter(models.Sale.user_id == user_id).group_by("tahun_pembayaran", "bulan_pembayaran").order_by(desc("tahun_pembayaran"), desc("bulan_pembayaran")).limit(7)
+
+def get_transaction_analysis(db: Session, user_id: int):
+    subq = (
+        select(
+            models.Sale.total_penjualan_idr,
+            func.percent_rank().over(order_by=models.Sale.total_penjualan_idr).label("p"),
+        )
+        .where(models.Sale.user_id == user_id)
+        .subquery()
+    )
+
+    median_subq = (
+        select(subq.c.total_penjualan_idr)
+        .where(subq.c.p <= 0.5)
+        .order_by(subq.c.p.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+
+    query = (
+        select(
+            func.avg(models.Sale.total_penjualan_idr).label("avg_penjualan"),
+            func.max(models.Sale.total_penjualan_idr).label("max_penjualan"),
+            func.min(models.Sale.total_penjualan_idr).label("min_penjualan"),
+            func.stddev_samp(models.Sale.total_penjualan_idr).label("std_penjualan"),
+            median_subq.label("median_penjualan"),
+        )
+        .where(models.Sale.user_id == user_id)
+    )
+
+    return db.execute(query).mappings().first()
+
+def get_temporal_day(db: Session, user_id: int):
+    return db.query(
+        func.dayofweek(models.Sale.tanggal_pembayaran).label("hari_transaksi"),
+        func.count(models.Sale.sale_id).label("jumlah_transaksi_hari")
+    ).filter(models.Sale.user_id == user_id).group_by("hari_transaksi").order_by(desc("jumlah_transaksi_hari")).limit(1).one()
+
+def get_temporal_month(db: Session, user_id: int):
+    return db.query(
+        func.month(models.Sale.tanggal_pembayaran).label("bulan_transaksi"),
+        func.count(models.Sale.sale_id).label("jumlah_transaksi_bulan")
+    ).filter(models.Sale.user_id == user_id).group_by("bulan_transaksi").order_by(desc("jumlah_transaksi_bulan")).limit(1).one()
+
+def get_temporal_time_range(db: Session, user_id: int):
+    sub = (
+        select(
+            models.Sale.sale_id,
+            func.floor(func.hour(models.Sale.tanggal_pembayaran) / 2).label("bucket")
+        )
+        .where(models.Sale.user_id == user_id)
+        .subquery()
+    )
+
+    query = (
+        select(
+            func.concat(
+                func.lpad(sub.c.bucket * 2, 2, "0"),
+                ":00 - ",
+                func.lpad(sub.c.bucket * 2 + 2, 2, "0"),
+                ":00"
+            ).label("rentang_jam_transaksi"),
+            func.count(sub.c.sale_id).label("jumlah_transaksi_jam")
+        )
+        .group_by(sub.c.bucket)
+        .order_by(func.count(sub.c.sale_id).desc())
+    )
+
+    return db.execute(query).mappings().first()
