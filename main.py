@@ -299,7 +299,7 @@ def authenticate(credentials: schemas.UserLogin, conn: Session):
         return False
 
 def create_token(email: str):
-    expiration_time = datetime.now(timezone.utc) + timedelta(hours=24)
+    expiration_time = datetime.now(timezone.utc) + timedelta(days=30)
     token = jwt.encode({"email": email, "exp": expiration_time.timestamp()}, SECRET_KEY, algorithm=ALGORITHM)
     return token
 
