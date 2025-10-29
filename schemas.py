@@ -55,6 +55,12 @@ class DataSummaryResponse(BaseModel):
     class Config:
         orm_mode = True
 
+class ProductResponse(BaseModel):
+    nomor_produk: int
+    nama_produk: str
+    total_transaksi: int
+    total_penjualan: int
+
 # TOP PRODUCTS
 class TopProductsResponse(BaseModel):
     nama_produk: str

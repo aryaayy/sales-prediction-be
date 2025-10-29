@@ -93,7 +93,14 @@ def get_sales_summary(db: Session, user_id: int):
 
     return result
 
-def count_fetch_filter(db: Session, user_id: int, year: str, status: str):
+def get_products(db: Session, user_id: int, limit: int, offset: int):
+    return db.query(
+        models.Sale.nama_produk.label("nama_produk"),
+        func.count(models.Sale.sale_id).label("total_transaksi"),
+        func.sum(models.Sale.total_penjualan_idr).label("total_penjualan"),
+    ).filter(models.Sale.user_id == user_id).group_by("nama_produk").order_by("nama_produk").limit(limit).offset(offset)
+
+def count_fetch_filter_sales(db: Session, user_id: int, year: str, status: str):
     if year == "all" and status == "all":
         return db.query(func.count(models.Sale.sale_id).label("rows")).filter(models.Sale.user_id == user_id).one()
     

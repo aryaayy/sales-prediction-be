@@ -189,12 +189,32 @@ async def my_sales(user_id: int, limit: int = 10, offset: int = 0, year: str = "
             total_penjualan_idr=row.total_penjualan_idr
         ))
 
-    rows_count = crud.count_fetch_filter(conn, user_id, year, status)
+    rows_count = crud.count_fetch_filter_sales(conn, user_id, year, status)
 
     return {
         "dataset": sales,
         "rows": rows_count.rows
     }
+
+@app.get("/api/sales/products/{user_id}", tags=["Dataset"], response_model=list[schemas.ProductResponse])
+async def my_products(user_id: int, limit: int = 10, offset: int = 0, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    payload = verify_token(token)
+
+    result = crud.get_products(conn, user_id, limit, offset)
+
+    products: schemas.ProductResponse = []
+
+    number = offset + 1
+    for row in result:
+        products.append(schemas.ProductResponse(
+            nomor_produk=number,
+            nama_produk=row.nama_produk,
+            total_transaksi=row.total_transaksi,
+            total_penjualan=row.total_penjualan
+        ))
+        number += 1
+    
+    return products
 
 # TOP PRODUCTS
 @app.get("/api/top_products/{user_id}", tags=["Top Products"], response_model=list[schemas.TopProductsResponse])
