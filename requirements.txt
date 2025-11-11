@@ -8,6 +8,6 @@ python-jose
 pandas
 numpy
 pymysql
-sklearn
+scikit-learn
 tensorflow
 matplotlib
