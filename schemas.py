@@ -17,11 +17,18 @@ class UserChangePassword(UserLogin):
     user_id: int
     new_password: str
 
+class UserEdit(UserBase):
+    user_id: int
+    nama_lengkap: str
+    nama_toko: str
+    role: str
+
 class UserResponse(UserBase):
     user_id: int
     nama_lengkap: str
     nama_toko: str
     role: str
+    csv_path: Optional[str]
 
     class Config:
         orm_mode = True
@@ -105,6 +112,75 @@ class TemporalPatternResponse(BaseModel):
     jumlah_transaksi_bulan: int
     rentang_jam_transaksi: str
     jumlah_transaksi_jam: int
+
+    class Config:
+        orm_mode = True
+
+# PREDICTIONS
+class PredictionArgs(BaseModel):
+    csv_path: str
+    user_id: int
+
+class JobStatus(BaseModel):
+    job_status: str
+
+    class Config:
+        orm_mode = True
+
+class PredictionMetricsResponse(BaseModel):
+    prediction_metric_id: int
+    arima_mae: float
+    arima_rmse: float
+    arima_waktu_train: float
+    arima_memori: float
+    lstm_mae: float
+    lstm_rmse: float
+    lstm_waktu_train: float
+    lstm_memori: float
+
+    class Config:
+        orm_mode = True
+
+class PredictionComparisonsResponse(BaseModel):
+    prediction_comparison_id: int
+    hari: int
+    hasil_total_penjualan_aktual: float
+    hasil_total_penjualan_arima: float
+    hasil_total_penjualan_lstm: float
+
+    class Config:
+        orm_mode = True
+
+class TotalPredictionResponse(BaseModel):
+    total_prediction_id: int
+    hasil_tanggal: datetime
+    hasil_total_penjualan_arima: float
+    hasil_total_penjualan_lstm: float
+
+    class Config:
+        orm_mode = True
+
+class ProductPredictionBase(BaseModel):
+    hasil_nama_produk_arima: str
+    hasil_nama_produk_lstm: str
+
+class DailyPredictionsResponse(ProductPredictionBase):
+    daily_product_prediction_id: int
+    hari: int
+
+    class Config:
+        orm_mode = True
+
+class WeeklyPredictionsResponse(ProductPredictionBase):
+    weekly_product_prediction_id: int
+    minggu: int
+
+    class Config:
+        orm_mode = True
+
+class MonthlyPredictionsResponse(ProductPredictionBase):
+    monthly_product_prediction_id: int
+    bulan: int
 
     class Config:
         orm_mode = True

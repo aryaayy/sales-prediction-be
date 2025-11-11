@@ -1,10 +1,11 @@
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, BackgroundTasks, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 
 import pandas as pd
 import numpy as np
 from io import StringIO
+import base64
 from sqlalchemy.orm import Session
 from database import get_db
 
@@ -14,7 +15,7 @@ from jose import jwt, JWTError
 import os
 from dotenv import load_dotenv
 import schemas, crud, models
-
+from prediction import run_prediction
 
 from datetime import datetime, timedelta, timezone
 
@@ -22,7 +23,7 @@ app = FastAPI(title="Sales Predictor", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080"],
+    allow_origins=["http://localhost:8081"],
     allow_credentials=True,
     allow_headers=["*"],
     allow_methods=["*"]
@@ -35,6 +36,7 @@ load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
 SALT = os.getenv("SALT").encode('utf-8')
+UPLOAD_DIR = os.getenv("UPLOAD_DIR")
 
 # ROOT
 @app.get("/api/", tags=["Root"])
@@ -53,7 +55,8 @@ async def read_user_me(conn: Session = Depends(get_db), token: str = Depends(oau
         email=user.email,
         nama_lengkap=user.nama_lengkap,
         nama_toko=user.nama_toko,
-        role=user.role
+        role=user.role,
+        csv_path=user.csv_path or ""
     )
 
 @app.post("/api/user/register", tags=["User"], response_model=schemas.UserResponse)
@@ -64,7 +67,7 @@ async def create_user(user: schemas.UserCreate, conn: Session = Depends(get_db))
     return crud.insert_user(conn, user)
 
 @app.put("/api/user/edit_profile", tags=["User"], response_model=schemas.UserResponse)
-async def edit_profile(user: schemas.UserResponse, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+async def edit_profile(user: schemas.UserEdit, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
     payload = verify_token(token)
 
     db_user = crud.get_user_by_id(conn, user.user_id)
@@ -79,7 +82,8 @@ async def edit_profile(user: schemas.UserResponse, conn: Session = Depends(get_d
         email=edited_user.email,
         nama_lengkap=edited_user.nama_lengkap,
         nama_toko=edited_user.nama_toko,
-        role=edited_user.role
+        role=edited_user.role,
+        csv_path=edited_user.csv_path or ""
     )
 
 @app.put("/api/user/change_password", tags=["User"], response_model=schemas.UserResponse)
@@ -101,7 +105,8 @@ async def change_password(user: schemas.UserChangePassword, conn: Session = Depe
         email=edited_user.email,
         nama_lengkap=edited_user.nama_lengkap,
         nama_toko=edited_user.nama_toko,
-        role=edited_user.role
+        role=edited_user.role,
+        csv_path=edited_user.csv_path or ""
     )
 
 @app.delete("/api/user/{user_id}/delete", tags=["User"])
@@ -117,44 +122,79 @@ async def delete_account(user_id: int, conn: Session = Depends(get_db), token: s
 
     return result
 
+def hash_path(path: str) -> str:
+    byte_path = path.encode('utf-8')
+    hashed = bcrypt.hashpw(byte_path, bcrypt.gensalt())
+    safe_hash = base64.urlsafe_b64encode(hashed).decode('utf-8').rstrip("=")
+    return safe_hash
+
 # DATASET
-@app.post("/api/sales/upload", tags=["Dataset"])
+@app.post("/api/sales/upload", tags=["Dataset"], response_model=schemas.UserResponse)
 async def upload_sales(file: UploadFile = File(...), conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
     payload = verify_token(token)
+    user = crud.get_user_by_email(conn, payload["email"])
+    prev_csv = os.path.join(UPLOAD_DIR, user.csv_path)
 
     if not file.filename.endswith(".csv"):
         raise HTTPException(400, detail="File format not supported")
+    
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
 
     try:
-        contents = (await file.read()).decode("utf-8")
-        df = pd.read_csv(StringIO(contents))
+        csv_path = hash_path(f"user_id{user.user_id}_{file.filename}")
+        csv_path += ".csv"
+
+        with open(os.path.join(UPLOAD_DIR, csv_path), "wb") as f:
+            contents = await file.read()
+            f.write(contents)
+
+        user.csv_path = csv_path
+
+        conn.commit()
+        conn.refresh(user)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+
+    try:
+        df = pd.read_csv(StringIO(contents.decode("utf-8")))
     except Exception as e:
         raise HTTPException(400, detail=f"Failed reading file: {str(e)}")
     
     df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace("[()]", "", regex=True)
     df = df.replace({np.nan: None, pd.NaT: None})
     df = df.dropna(how="all")
-    
-    user = crud.get_user_by_email(conn, payload["email"])
 
     df["tanggal_pembayaran"] = pd.to_datetime(df["tanggal_pembayaran"], errors="coerce")
     df["user_id"] = user.user_id
 
     try:
+        crud.delete_sales(conn, user.user_id)
         records = df.to_dict(orient="records")
         conn.bulk_insert_mappings(models.Sale, records)
         conn.commit()
+        if prev_csv != f"{UPLOAD_DIR}None" and prev_csv != UPLOAD_DIR and os.path.exists(prev_csv):
+            os.remove(prev_csv)
     except Exception as e:
         conn.rollback()
         raise HTTPException(500, detail=f"Database insertion failed: {str(e)}")
     
-    return {"message": f"Successfully uploaded {len(df)} rows of sales data"}
+    return schemas.UserResponse(
+        user_id=user.user_id,
+        email=user.email,
+        nama_lengkap=user.nama_lengkap,
+        nama_toko=user.nama_toko,
+        role=user.role,
+        csv_path=user.csv_path
+    )
 
-@app.get("/api/sales/summary/{user_id}", tags=["Dataset"], response_model=schemas.DataSummaryResponse)
+@app.get("/api/sales/summary/{user_id}", tags=["Dataset"])
 async def summarize_sales(user_id: int, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
     payload = verify_token(token)
 
     sales = crud.get_sales_summary(conn, user_id)
+    
+    if sales == None:
+        return None
 
     return schemas.DataSummaryResponse(
         total_transaksi=sales.total_transaksi,
@@ -304,6 +344,196 @@ async def my_temporal_pattern(user_id: int, conn: Session = Depends(get_db), tok
         rentang_jam_transaksi=time_range.rentang_jam_transaksi,
         jumlah_transaksi_jam=time_range.jumlah_transaksi_jam,
     )
+
+# PREDICTIONS
+@app.post("/api/predictions/predict", tags=["Predictions"])
+async def predict(args: schemas.PredictionArgs, background_tasks: BackgroundTasks, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    payload = verify_token(token)
+
+    crud.delete_prediction_job(conn, args.user_id)
+    crud.delete_all_predictions(conn, args.user_id)
+    conn.commit()
+
+    csv_path = f"uploads/sales/{args.csv_path}"
+    background_tasks.add_task(run_prediction, csv_path, args.user_id)
+
+    return {"status": "file executed successfully", "file": csv_path}
+
+def get_job(user_id: int, conn: Session = Depends(get_db)):
+    result = crud.get_prediction_job(conn, user_id)
+
+    if result == None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Prediction job not found."
+        )
+
+    return result
+
+@app.get("/api/predictions/metrics/{user_id}", tags=["Predictions"])
+async def my_prediction_metrics(user_id: int, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme), job = Depends(get_job)):
+    payload = verify_token(token)
+
+    if job.status == "running" or job.status == "failed":
+        return {
+            "job_status": job.status,
+            "data": ""
+        }
+
+    result = crud.get_prediction_metrics(conn, user_id)
+
+    metrics = schemas.PredictionMetricsResponse(
+        prediction_metric_id=result.prediction_metric_id,
+        arima_mae=result.arima_mae,
+        arima_rmse=result.arima_rmse,
+        arima_waktu_train=result.arima_waktu_train,
+        arima_memori=result.arima_memori,
+        lstm_mae=result.lstm_mae,
+        lstm_rmse=result.lstm_rmse,
+        lstm_waktu_train=result.lstm_waktu_train,
+        lstm_memori=result.lstm_memori,
+    )
+
+    return {
+        "job_status": job.status,
+        "data": metrics
+    }
+
+@app.get("/api/predictions/comparisons/{user_id}", tags=["Predictions"])
+async def my_prediction_comparisons(user_id: int, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme), job = Depends(get_job)):
+    payload = verify_token(token)
+
+    if job.status == "running" or job.status == "failed":
+        return {
+            "job_status": job.status,
+            "data": []
+        }
+
+    result = crud.get_prediction_comparisons(conn, user_id)
+
+    prediction_comparisons = []
+
+    for row in result:
+        prediction_comparisons.append(schemas.PredictionComparisonsResponse(
+            prediction_comparison_id=row.prediction_comparison_id,
+            hari=row.hari,
+            hasil_total_penjualan_aktual=row.hasil_total_penjualan_aktual,
+            hasil_total_penjualan_arima=row.hasil_total_penjualan_arima,
+            hasil_total_penjualan_lstm=row.hasil_total_penjualan_lstm
+        ))
+
+    return {
+        "job_status": job.status,
+        "data": prediction_comparisons
+    }
+
+@app.get("/api/predictions/total/{user_id}", tags=["Predictions"])
+async def my_total_predictions(user_id: int, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme), job = Depends(get_job)):
+    payload = verify_token(token)
+
+    if job.status == "running" or job.status == "failed":
+        return {
+            "job_status": job.status,
+            "data": []
+        }
+
+    result = crud.get_total_predictions(conn, user_id)
+
+    total_predictions = []
+
+    for row in result:
+        total_predictions.append(schemas.TotalPredictionResponse(
+            total_prediction_id=row.total_prediction_id,
+            hasil_tanggal=row.hasil_tanggal,
+            hasil_total_penjualan_arima=row.hasil_total_penjualan_arima,
+            hasil_total_penjualan_lstm=row.hasil_total_penjualan_lstm
+        ))
+
+    return {
+        "job_status": job.status,
+        "data": total_predictions
+    }
+
+@app.get("/api/predictions/daily/{user_id}", tags=["Predictions"])
+async def my_daily_predicions(user_id: int, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme), job = Depends(get_job)):
+    payload = verify_token(token)
+
+    if job.status == "running" or job.status == "failed":
+        return {
+            "job_status": job.status,
+            "data": []
+        }
+
+    result = crud.get_daily_predictions(conn, user_id)
+
+    products = []
+
+    for row in result:
+        products.append(schemas.DailyPredictionsResponse(
+            daily_product_prediction_id=row.daily_product_prediction_id,
+            hari=row.hari,
+            hasil_nama_produk_arima=row.hasil_nama_produk_arima,
+            hasil_nama_produk_lstm=row.hasil_nama_produk_lstm,
+        ))
+
+    return {
+        "job_status": job.status,
+        "data": products
+    }
+
+@app.get("/api/predictions/weekly/{user_id}", tags=["Predictions"])
+async def my_weekly_predicions(user_id: int, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme), job = Depends(get_job)):
+    payload = verify_token(token)
+
+    if job.status == "running" or job.status == "failed":
+        return {
+            "job_status": job.status,
+            "data": []
+        }
+
+    result = crud.get_weekly_predictions(conn, user_id)
+
+    products = []
+
+    for row in result:
+        products.append(schemas.WeeklyPredictionsResponse(
+            weekly_product_prediction_id=row.weekly_product_prediction_id,
+            minggu=row.minggu,
+            hasil_nama_produk_arima=row.hasil_nama_produk_arima,
+            hasil_nama_produk_lstm=row.hasil_nama_produk_lstm,
+        ))
+
+    return {
+        "job_status": job.status,
+        "data": products
+    }
+
+@app.get("/api/predictions/monthly/{user_id}", tags=["Predictions"])
+async def my_monthly_predicions(user_id: int, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme), job = Depends(get_job)):
+    payload = verify_token(token)
+
+    if job.status == "running" or job.status == "failed":
+        return {
+            "job_status": job.status,
+            "data": []
+        }
+
+    result = crud.get_monthly_predictions(conn, user_id)
+
+    products = []
+
+    for row in result:
+        products.append(schemas.MonthlyPredictionsResponse(
+            monthly_product_prediction_id=row.monthly_product_prediction_id,
+            bulan=row.bulan,
+            hasil_nama_produk_arima=row.hasil_nama_produk_arima,
+            hasil_nama_produk_lstm=row.hasil_nama_produk_lstm,
+        ))
+
+    return {
+        "job_status": job.status,
+        "data": products
+    }
 
 # AUTHENTICATION
 def hash_password(password):

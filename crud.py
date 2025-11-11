@@ -77,6 +77,9 @@ def get_sales(db: Session, user_id: int, limit: int, offset: int, year: str, sta
 
     return db.query(models.Sale).filter(models.Sale.user_id == user_id, extract("year", models.Sale.tanggal_pembayaran) == year, models.Sale.status_terakhir == status).limit(limit).offset(offset)
 
+def delete_sales(db: Session, user_id: int):
+    db.query(models.Sale).filter(models.Sale.user_id == user_id).delete()
+
 def get_sales_summary(db: Session, user_id: int):
     result = db.query(
         func.count(models.Sale.sale_id).label("total_transaksi"),
@@ -90,6 +93,9 @@ def get_sales_summary(db: Session, user_id: int):
         func.min(models.Sale.tanggal_pembayaran).label("periode_awal"),
         func.max(models.Sale.tanggal_pembayaran).label("periode_akhir")
     ).filter(models.Sale.user_id == user_id).one()
+
+    if result.total_transaksi == 0 and result.total_produk == 0:
+        return None
 
     return result
 
@@ -223,3 +229,36 @@ def get_temporal_time_range(db: Session, user_id: int):
     )
 
     return db.execute(query).mappings().first()
+
+# PREDICTIONS
+def get_prediction_job(db: Session, user_id: int):
+    return db.query(models.PredictionJob).filter(models.PredictionJob.user_id == user_id).first()
+
+def get_total_predictions(db: Session, user_id: int):
+    return db.query(models.TotalPrediction).filter(models.TotalPrediction.user_id == user_id).all()
+
+def get_prediction_comparisons(db: Session, user_id: int):
+    return db.query(models.PredictionComparison).filter(models.PredictionComparison.user_id == user_id).all()
+
+def get_prediction_metrics(db: Session, user_id: int):
+    return db.query(models.PredictionMetric).filter(models.PredictionMetric.user_id == user_id).first()
+
+def get_daily_predictions(db: Session, user_id: int):
+    return db.query(models.DailyProductPrediction).filter(models.DailyProductPrediction.user_id == user_id).all()
+
+def get_weekly_predictions(db: Session, user_id: int):
+    return db.query(models.WeeklyProductPrediction).filter(models.WeeklyProductPrediction.user_id == user_id).all()
+
+def get_monthly_predictions(db: Session, user_id: int):
+    return db.query(models.MonthlyProductPrediction).filter(models.MonthlyProductPrediction.user_id == user_id).all()
+
+def delete_prediction_job(db: Session, user_id: int):
+    db.query(models.PredictionJob).filter(models.PredictionJob.user_id == user_id).delete()
+
+def delete_all_predictions(db: Session, user_id: int):
+    db.query(models.PredictionMetric).filter(models.PredictionMetric.user_id == user_id).delete()
+    db.query(models.PredictionComparison).filter(models.PredictionComparison.user_id == user_id).delete()
+    db.query(models.TotalPrediction).filter(models.TotalPrediction.user_id == user_id).delete()
+    db.query(models.DailyProductPrediction).filter(models.DailyProductPrediction.user_id == user_id).delete()
+    db.query(models.WeeklyProductPrediction).filter(models.WeeklyProductPrediction.user_id == user_id).delete()
+    db.query(models.MonthlyProductPrediction).filter(models.MonthlyProductPrediction.user_id == user_id).delete()
