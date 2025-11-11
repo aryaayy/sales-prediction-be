@@ -362,8 +362,8 @@ def run_prediction(csv_path: str, user_id: int):
             .apply(list)
         )
 
-        pd.Series(produk_terjual_unik, name="Nama Produk").to_csv("produk_terjual_unik.csv", index=False)
-        produk_per_hari.to_csv("produk_terjual_per_hari.csv")
+        # pd.Series(produk_terjual_unik, name="Nama Produk").to_csv("produk_terjual_unik.csv", index=False)
+        # produk_per_hari.to_csv("produk_terjual_per_hari.csv")
 
         rev_per_produk_harian = (
             df.groupby(['Tanggal Pembayaran','Nama Produk'])['Total Penjualan (IDR)']
