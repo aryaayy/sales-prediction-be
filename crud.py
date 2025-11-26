@@ -61,24 +61,24 @@ def delete_user(db: Session, db_user: models.User):
 # DATASET
 def get_sales(db: Session, user_id: int, limit: int, offset: int, year: str, status: str):
     if year == "all" and status == "all":
-        return db.query(models.Sale).filter(models.Sale.user_id == user_id).limit(limit).offset(offset)
+        return db.query(models.Sale).limit(limit).offset(offset)
     
     if year == "all" and status != "others":
-        return db.query(models.Sale).filter(models.Sale.user_id == user_id, models.Sale.status_terakhir == status).limit(limit).offset(offset)
+        return db.query(models.Sale).filter(models.Sale.status_terakhir == status).limit(limit).offset(offset)
     
     if year == "all" and status == "others":
-        return db.query(models.Sale).filter(models.Sale.user_id == user_id, or_(not_(models.Sale.status_terakhir.in_(["Pesanan Selesai", "Dibatalkan Penjual", "Dibatalkan Pembeli", "Dibatalkan Sistem", "Sedang Dikirim"])), models.Sale.status_terakhir.is_(None))).limit(limit).offset(offset)
+        return db.query(models.Sale).filter(or_(not_(models.Sale.status_terakhir.in_(["Pesanan Selesai", "Dibatalkan Penjual", "Dibatalkan Pembeli", "Dibatalkan Sistem", "Sedang Dikirim"])), models.Sale.status_terakhir.is_(None))).limit(limit).offset(offset)
     
     if status == "all":
-        return db.query(models.Sale).filter(models.Sale.user_id == user_id, extract("year", models.Sale.tanggal_pembayaran) == year).limit(limit).offset(offset)
+        return db.query(models.Sale).filter(extract("year", models.Sale.tanggal_pembayaran) == year).limit(limit).offset(offset)
     
     if status == "others":
-        return db.query(models.Sale).filter(models.Sale.user_id == user_id, extract("year", models.Sale.tanggal_pembayaran) == year, or_(not_(models.Sale.status_terakhir.in_(["Pesanan Selesai", "Dibatalkan Penjual", "Dibatalkan Pembeli", "Dibatalkan Sistem", "Sedang Dikirim"])), models.Sale.status_terakhir.is_(None))).limit(limit).offset(offset)
+        return db.query(models.Sale).filter(extract("year", models.Sale.tanggal_pembayaran) == year, or_(not_(models.Sale.status_terakhir.in_(["Pesanan Selesai", "Dibatalkan Penjual", "Dibatalkan Pembeli", "Dibatalkan Sistem", "Sedang Dikirim"])), models.Sale.status_terakhir.is_(None))).limit(limit).offset(offset)
 
-    return db.query(models.Sale).filter(models.Sale.user_id == user_id, extract("year", models.Sale.tanggal_pembayaran) == year, models.Sale.status_terakhir == status).limit(limit).offset(offset)
+    return db.query(models.Sale).filter(extract("year", models.Sale.tanggal_pembayaran) == year, models.Sale.status_terakhir == status).limit(limit).offset(offset)
 
 def delete_sales(db: Session, user_id: int):
-    db.query(models.Sale).filter(models.Sale.user_id == user_id).delete()
+    db.query(models.Sale).delete()
 
 def get_sales_summary(db: Session, user_id: int):
     result = db.query(
@@ -92,7 +92,7 @@ def get_sales_summary(db: Session, user_id: int):
         func.sum(case((models.Sale.status_terakhir == "Sedang Dikirim", 1), else_=0)).label("total_status_sedang_dikirim"),
         func.min(models.Sale.tanggal_pembayaran).label("periode_awal"),
         func.max(models.Sale.tanggal_pembayaran).label("periode_akhir")
-    ).filter(models.Sale.user_id == user_id).one()
+    ).one()
 
     if result.total_transaksi == 0 and result.total_produk == 0:
         return None
@@ -104,25 +104,25 @@ def get_products(db: Session, user_id: int, limit: int, offset: int):
         models.Sale.nama_produk.label("nama_produk"),
         func.count(models.Sale.sale_id).label("total_transaksi"),
         func.sum(models.Sale.total_penjualan_idr).label("total_penjualan"),
-    ).filter(models.Sale.user_id == user_id).group_by("nama_produk").order_by("nama_produk").limit(limit).offset(offset)
+    ).group_by("nama_produk").order_by("nama_produk").limit(limit).offset(offset)
 
 def count_fetch_filter_sales(db: Session, user_id: int, year: str, status: str):
     if year == "all" and status == "all":
-        return db.query(func.count(models.Sale.sale_id).label("rows")).filter(models.Sale.user_id == user_id).one()
+        return db.query(func.count(models.Sale.sale_id).label("rows")).one()
     
     if year == "all" and status != "others":
-        return db.query(func.count(models.Sale.sale_id).label("rows")).filter(models.Sale.user_id == user_id, models.Sale.status_terakhir == status).one()
+        return db.query(func.count(models.Sale.sale_id).label("rows")).filter(models.Sale.status_terakhir == status).one()
     
     if year == "all" and status == "others":
-        return db.query(func.count(models.Sale.sale_id).label("rows")).filter(models.Sale.user_id == user_id, or_(not_(models.Sale.status_terakhir.in_(["Pesanan Selesai", "Dibatalkan Penjual", "Dibatalkan Pembeli", "Dibatalkan Sistem", "Sedang Dikirim"])), models.Sale.status_terakhir.is_(None))).one()
+        return db.query(func.count(models.Sale.sale_id).label("rows")).filter(or_(not_(models.Sale.status_terakhir.in_(["Pesanan Selesai", "Dibatalkan Penjual", "Dibatalkan Pembeli", "Dibatalkan Sistem", "Sedang Dikirim"])), models.Sale.status_terakhir.is_(None))).one()
     
     if status == "all":
-        return db.query(func.count(models.Sale.sale_id).label("rows")).filter(models.Sale.user_id == user_id, extract("year", models.Sale.tanggal_pembayaran) == year).one()
+        return db.query(func.count(models.Sale.sale_id).label("rows")).filter(extract("year", models.Sale.tanggal_pembayaran) == year).one()
     
     if status == "others":
-        return db.query(func.count(models.Sale.sale_id).label("rows")).filter(models.Sale.user_id == user_id, extract("year", models.Sale.tanggal_pembayaran) == year, or_(not_(models.Sale.status_terakhir.in_(["Pesanan Selesai", "Dibatalkan Penjual", "Dibatalkan Pembeli", "Dibatalkan Sistem", "Sedang Dikirim"])), models.Sale.status_terakhir.is_(None))).one()
+        return db.query(func.count(models.Sale.sale_id).label("rows")).filter(extract("year", models.Sale.tanggal_pembayaran) == year, or_(not_(models.Sale.status_terakhir.in_(["Pesanan Selesai", "Dibatalkan Penjual", "Dibatalkan Pembeli", "Dibatalkan Sistem", "Sedang Dikirim"])), models.Sale.status_terakhir.is_(None))).one()
 
-    return db.query(func.count(models.Sale.sale_id).label("rows")).filter(models.Sale.user_id == user_id, extract("year", models.Sale.tanggal_pembayaran) == year, models.Sale.status_terakhir == status).one()
+    return db.query(func.count(models.Sale.sale_id).label("rows")).filter(extract("year", models.Sale.tanggal_pembayaran) == year, models.Sale.status_terakhir == status).one()
 
 # TOP PRODUCTS
 def get_top_products_summary(db: Session, user_id: int):
@@ -132,7 +132,6 @@ def get_top_products_summary(db: Session, user_id: int):
             func.sum(models.Sale.total_penjualan_idr).label("sum_penjualan"),
             func.sum(models.Sale.jumlah_produk_dibeli).label("sum_dibeli"),
         )
-        .where(models.Sale.user_id == user_id)
         .group_by(models.Sale.nama_produk)
         .order_by(desc("sum_penjualan"))
         .limit(10)
@@ -151,7 +150,7 @@ def get_top_products(db: Session, user_id: int):
         func.count(models.Sale.sale_id).label("total_transaksi"),
         func.sum(models.Sale.total_penjualan_idr).label("total_penjualan"),
         func.sum(models.Sale.jumlah_produk_dibeli).label("total_unit_terjual"),
-    ).filter(models.Sale.user_id == user_id).group_by("nama_produk").order_by(desc("total_penjualan")).limit(10)
+    ).group_by("nama_produk").order_by(desc("total_penjualan")).limit(10)
 
 # STATISTICS
 def get_monthly_sales_trend(db: Session, user_id: int):
@@ -159,7 +158,7 @@ def get_monthly_sales_trend(db: Session, user_id: int):
         func.month(models.Sale.tanggal_pembayaran).label("bulan_pembayaran"),
         func.year(models.Sale.tanggal_pembayaran).label("tahun_pembayaran"),
         func.sum(models.Sale.total_penjualan_idr).label("total_penjualan")
-    ).filter(models.Sale.user_id == user_id).group_by("tahun_pembayaran", "bulan_pembayaran").order_by(desc("tahun_pembayaran"), desc("bulan_pembayaran")).limit(7)
+    ).group_by("tahun_pembayaran", "bulan_pembayaran").order_by(desc("tahun_pembayaran"), desc("bulan_pembayaran")).limit(7)
 
 def get_transaction_analysis(db: Session, user_id: int):
     subq = (
@@ -167,7 +166,6 @@ def get_transaction_analysis(db: Session, user_id: int):
             models.Sale.total_penjualan_idr,
             func.percent_rank().over(order_by=models.Sale.total_penjualan_idr).label("p"),
         )
-        .where(models.Sale.user_id == user_id)
         .subquery()
     )
 
@@ -187,7 +185,6 @@ def get_transaction_analysis(db: Session, user_id: int):
             func.stddev_samp(models.Sale.total_penjualan_idr).label("std_penjualan"),
             median_subq.label("median_penjualan"),
         )
-        .where(models.Sale.user_id == user_id)
     )
 
     return db.execute(query).mappings().first()
@@ -196,13 +193,13 @@ def get_temporal_day(db: Session, user_id: int):
     return db.query(
         func.dayofweek(models.Sale.tanggal_pembayaran).label("hari_transaksi"),
         func.count(models.Sale.sale_id).label("jumlah_transaksi_hari")
-    ).filter(models.Sale.user_id == user_id).group_by("hari_transaksi").order_by(desc("jumlah_transaksi_hari")).limit(1).one()
+    ).group_by("hari_transaksi").order_by(desc("jumlah_transaksi_hari")).limit(1).one()
 
 def get_temporal_month(db: Session, user_id: int):
     return db.query(
         func.month(models.Sale.tanggal_pembayaran).label("bulan_transaksi"),
         func.count(models.Sale.sale_id).label("jumlah_transaksi_bulan")
-    ).filter(models.Sale.user_id == user_id).group_by("bulan_transaksi").order_by(desc("jumlah_transaksi_bulan")).limit(1).one()
+    ).group_by("bulan_transaksi").order_by(desc("jumlah_transaksi_bulan")).limit(1).one()
 
 def get_temporal_time_range(db: Session, user_id: int):
     sub = (
@@ -210,7 +207,6 @@ def get_temporal_time_range(db: Session, user_id: int):
             models.Sale.sale_id,
             func.floor(func.hour(models.Sale.tanggal_pembayaran) / 2).label("bucket")
         )
-        .where(models.Sale.user_id == user_id)
         .subquery()
     )
 
@@ -232,33 +228,33 @@ def get_temporal_time_range(db: Session, user_id: int):
 
 # PREDICTIONS
 def get_prediction_job(db: Session, user_id: int):
-    return db.query(models.PredictionJob).filter(models.PredictionJob.user_id == user_id).first()
+    return db.query(models.PredictionJob).first()
 
 def get_total_predictions(db: Session, user_id: int):
-    return db.query(models.TotalPrediction).filter(models.TotalPrediction.user_id == user_id).all()
+    return db.query(models.TotalPrediction).all()
 
 def get_prediction_comparisons(db: Session, user_id: int):
-    return db.query(models.PredictionComparison).filter(models.PredictionComparison.user_id == user_id).all()
+    return db.query(models.PredictionComparison).all()
 
 def get_prediction_metrics(db: Session, user_id: int):
-    return db.query(models.PredictionMetric).filter(models.PredictionMetric.user_id == user_id).first()
+    return db.query(models.PredictionMetric).first()
 
 def get_daily_predictions(db: Session, user_id: int):
-    return db.query(models.DailyProductPrediction).filter(models.DailyProductPrediction.user_id == user_id).all()
+    return db.query(models.DailyProductPrediction).all()
 
 def get_weekly_predictions(db: Session, user_id: int):
-    return db.query(models.WeeklyProductPrediction).filter(models.WeeklyProductPrediction.user_id == user_id).all()
+    return db.query(models.WeeklyProductPrediction).all()
 
 def get_monthly_predictions(db: Session, user_id: int):
-    return db.query(models.MonthlyProductPrediction).filter(models.MonthlyProductPrediction.user_id == user_id).all()
+    return db.query(models.MonthlyProductPrediction).all()
 
 def delete_prediction_job(db: Session, user_id: int):
-    db.query(models.PredictionJob).filter(models.PredictionJob.user_id == user_id).delete()
+    db.query(models.PredictionJob).delete()
 
 def delete_all_predictions(db: Session, user_id: int):
-    db.query(models.PredictionMetric).filter(models.PredictionMetric.user_id == user_id).delete()
-    db.query(models.PredictionComparison).filter(models.PredictionComparison.user_id == user_id).delete()
-    db.query(models.TotalPrediction).filter(models.TotalPrediction.user_id == user_id).delete()
-    db.query(models.DailyProductPrediction).filter(models.DailyProductPrediction.user_id == user_id).delete()
-    db.query(models.WeeklyProductPrediction).filter(models.WeeklyProductPrediction.user_id == user_id).delete()
-    db.query(models.MonthlyProductPrediction).filter(models.MonthlyProductPrediction.user_id == user_id).delete()
+    db.query(models.PredictionMetric).delete()
+    db.query(models.PredictionComparison).delete()
+    db.query(models.TotalPrediction).delete()
+    db.query(models.DailyProductPrediction).delete()
+    db.query(models.WeeklyProductPrediction).delete()
+    db.query(models.MonthlyProductPrediction).delete()

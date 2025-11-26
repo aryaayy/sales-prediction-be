@@ -8,6 +8,7 @@ from io import StringIO
 import base64
 from sqlalchemy.orm import Session
 from database import get_db
+from typing import Dict, List
 
 import bcrypt
 from jose import jwt, JWTError
@@ -19,11 +20,15 @@ from prediction import run_prediction
 
 from datetime import datetime, timedelta, timezone
 
+from statsmodels.tsa.arima.model import ARIMAResults
+import tensorflow as tf
+import joblib
+
 app = FastAPI(title="Sales Predictor", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8081"],
+    allow_origins=["http://localhost:8080", "http://localhost:8081"],
     allow_credentials=True,
     allow_headers=["*"],
     allow_methods=["*"]
@@ -37,6 +42,27 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
 SALT = os.getenv("SALT").encode('utf-8')
 UPLOAD_DIR = os.getenv("UPLOAD_DIR")
+
+# --- Global Variables ---
+lstm_model = None
+arima_model = None
+scaler = None
+metadata = None
+
+# Konfigurasi
+TIME_STEP = 30
+IS_LOG_ARIMA = True
+
+@app.on_event("startup")
+def load_artifacts():
+    global lstm_model, arima_model, scaler, metadata
+    
+    lstm_model = tf.keras.models.load_model('models/lstm_model.h5')
+    arima_model = ARIMAResults.load('models/arima_model.pkl')
+    scaler = joblib.load('models/scaler.pkl')
+    metadata = joblib.load('models/model_metadata.pkl')
+    
+    # print(f"Artifacts loaded. Training data ended on: {metadata['last_date']}")
 
 # ROOT
 @app.get("/api/", tags=["Root"])
@@ -534,6 +560,294 @@ async def my_monthly_predicions(user_id: int, conn: Session = Depends(get_db), t
         "job_status": job.status,
         "data": products
     }
+
+# --- Helper Functions ---
+def predict_lstm_recursive(days_ahead, initial_sequence):
+    """
+    Melakukan prediksi berulang (recursive) untuk LSTM
+    """
+    current_batch = initial_sequence.reshape(1, TIME_STEP, 1)
+    predicted_val = 0
+    
+    for i in range(days_ahead):
+        pred = lstm_model.predict(current_batch, verbose=0)
+        predicted_val = pred[0][0]
+        current_batch = np.append(current_batch[:, 1:, :], [[pred[0]]], axis=1)
+        
+    real_prediction = scaler.inverse_transform([[predicted_val]])
+    return float(real_prediction[0][0])
+
+def format_idr(value):
+    return f"Rp{value:,.0f}".replace(",", ".")
+
+# ==========================================
+# ENDPOINT 1: Predict Single Day + Top Products
+# ==========================================
+@app.post("/api/predict/single_day")
+def predict_single_day_products(payload: schemas.DateInput, token: str = Depends(oauth2_scheme)):
+    # payload = verify_token(token)
+    """
+    Prediksi total penjualan pada 1 tanggal spesifik & 
+    secara otomatis menentukan Top 5 Produk terlaris hari itu.
+    """
+    try:
+        if not metadata:
+            raise HTTPException(status_code=503, detail="Model belum siap (metadata not loaded).")
+
+        last_train_date = pd.to_datetime(metadata['last_date']).date()
+        target_date = payload.target_date
+        
+        # Hitung selisih hari
+        delta = (target_date - last_train_date).days
+        
+        if delta < 1:
+             raise HTTPException(status_code=400, detail=f"Tanggal target harus setelah {last_train_date}.")
+
+        # 1. Prediksi Total Penjualan (LSTM Recursive)
+        # Menggunakan sequence terakhir dari metadata sebagai start point
+        lstm_total = predict_lstm_recursive(delta, metadata['last_sequence'])
+        lstm_total = max(0.0, lstm_total) # Pastikan tidak negatif
+
+        # 2. Ambil Share Produk dari Metadata
+        # Dictionary ini berisi { "Nama Produk": 0.05, ... }
+        product_share: Dict = metadata.get('product_share', {})
+        
+        # 3. Hitung Estimasi Penjualan untuk SETIAP produk
+        all_product_allocations = []
+        
+        for product_name, share in product_share.items():
+            # Opsional: Skip kategori 'Lainnya' jika hanya ingin produk spesifik
+            if product_name == "__Lainnya__": 
+                continue 
+                
+            # Rumus: Total Prediksi Hari Itu * Persentase Share Produk
+            estimated_sales = lstm_total * share
+            
+            all_product_allocations.append({
+                "product_name": product_name,
+                "estimated_sales": estimated_sales,
+                "share_percent": share * 100
+            })
+        
+        # 4. Sortir dari Penjualan Tertinggi ke Terendah
+        all_product_allocations.sort(key=lambda x: x['estimated_sales'], reverse=True)
+        
+        # 5. Ambil Top 5
+        top_5_products = all_product_allocations[:5]
+
+        # 6. Format Output
+        formatted_top_5 = []
+        for item in top_5_products:
+            formatted_top_5.append({
+                "product_name": item['product_name'],
+                "estimated_sales_idr": format_idr(item['estimated_sales']),
+                "raw_value": item['estimated_sales']
+            })
+        
+        return {
+            "date": target_date,
+            "days_ahead": delta,
+            "prediction_summary": {
+                "total_sales_forecast": format_idr(lstm_total),
+                "model_used": "LSTM Recursive"
+            },
+            "top_5_products": formatted_top_5
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==========================================
+# ENDPOINT 2: Compare Last 10 Days (Actual vs Predicted)
+# ==========================================
+@app.get("/api/compare/last_10_days")
+def compare_models_accuracy():
+    """
+    Membandingkan data aktual 10 hari terakhir (dari dataset training/testing)
+    dengan hasil prediksi ARIMA dan LSTM pada periode yang sama.
+    Berguna untuk evaluasi performa model secara real-time.
+    """
+    try:
+        actual_data = metadata['actual_data_last_10']
+        dates = actual_data['dates']
+        actual_values = actual_data['values']
+        
+        results = []
+        
+        # Data awal untuk LSTM (30 hari sebelum periode 10 hari ini)
+        current_lstm_batch = metadata['lstm_input_for_compare'].reshape(1, TIME_STEP, 1)
+
+        # ARIMA Forecast (In-Sample / Out-of-Sample)
+        # Kita perlu trick sedikit: ARIMA model di statsmodels menyimpan history.
+        # Kita bisa memanggil predict() pada index yang sesuai.
+        # Namun, cara paling aman dan simpel untuk API ini adalah melakukan forecast 
+        # seolah-olah data berakhir sebelum 10 hari ini (jika model belum ditraining ulang).
+        # TAPI, karena model 'arima_sales_model.pkl' adalah hasil fit PNUH,
+        # maka 'predict' pada 10 hari terakhir adalah in-sample prediction.
+        
+        # Ambil panjang data total yang diketahui model
+        n_obs = len(arima_model.fittedvalues)
+        # Prediksi 10 hari terakhir (index n_obs-10 sampai n_obs-1)
+        arima_preds_log = arima_model.predict(start=n_obs-10, end=n_obs-1)
+        
+        if IS_LOG_ARIMA:
+            arima_preds = np.expm1(arima_preds_log)
+        else:
+            arima_preds = arima_preds_log
+
+        # Loop 10 hari
+        for i in range(10):
+            # 1. Actual
+            act_val = actual_values[i]
+            
+            # 2. ARIMA Prediction
+            # Perlu handling jika arima_preds berupa series/array
+            arima_val = float(arima_preds.iloc[i]) if hasattr(arima_preds, 'iloc') else float(arima_preds[i])
+            arima_val = max(0.0, arima_val)
+
+            # 3. LSTM Prediction (Recursive)
+            # Prediksi hari ini
+            lstm_pred_scaled = lstm_model.predict(current_lstm_batch, verbose=0)[0][0]
+            
+            # Kembalikan ke real value
+            lstm_val = float(scaler.inverse_transform([[lstm_pred_scaled]])[0][0])
+            lstm_val = max(0.0, lstm_val)
+
+            # Update batch LSTM: 
+            # PENTING: Untuk perbandingan yang fair, biasanya kita punya 2 metode:
+            # a) One-step-ahead: Update batch menggunakan data AKTUAL hari ini (Teacher Forcing).
+            # b) Multi-step: Update batch menggunakan data PREDIKSI hari ini.
+            # Di sini kita gunakan (b) Multi-step agar konsisten dengan cara prediksi masa depan.
+            current_lstm_batch = np.append(current_lstm_batch[:, 1:, :], [[[lstm_pred_scaled]]], axis=1)
+
+            # Hitung Error (Absolute Percentage Error - APE) untuk hari ini
+            # Hindari pembagian dengan 0
+            safe_act = act_val if act_val > 0 else 1
+            arima_ape = abs(act_val - arima_val) / safe_act * 100
+            lstm_ape = abs(act_val - lstm_val) / safe_act * 100
+
+            results.append({
+                "date": dates[i],
+                "day": i+1,
+                "actual": act_val,
+                "arima_pred": arima_val,
+                "lstm_pred": lstm_val,
+                "diff_arima": act_val - arima_val,
+                "diff_lstm": act_val - lstm_val,
+                # "error_percent_arima": f"{arima_ape:.2f}%",
+                # "error_percent_lstm": f"{lstm_ape:.2f}%"
+            })
+
+        return {
+            "description": "Perbandingan Data Aktual vs Prediksi Model (10 Hari Terakhir)",
+            "data": results
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/predictions/predict/seven_days")
+def predict_sales_7_days(payload: schemas.DateInput):
+    """
+    Prediksi penjualan selama 7 hari berturut-turut dimulai dari tanggal target.
+    """
+    try:
+        # 1. Hitung selisih hari dari data training terakhir
+        last_train_date = pd.to_datetime(metadata['last_date']).date()
+        target_date = payload.target_date
+        
+        # Delta adalah jarak dari data terakhir ke hari pertama prediksi
+        delta = (target_date - last_train_date).days
+        
+        if delta < 1:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Tanggal target harus setelah {last_train_date}."
+            )
+        
+        # Berapa total langkah yang harus diprediksi?
+        # Jika delta=1 (besok), kita butuh 10 hari (1 s/d 10) -> total 10 langkah
+        # Jika delta=5, kita butuh hari ke 5 s/d 14 -> total 5 + 9 = 14 langkah
+        total_steps = delta + 6
+
+        # ============================
+        # --- A. Prediksi ARIMA ---
+        # ============================
+        
+        # Forecast sampai langkah terakhir yang dibutuhkan
+        arima_forecast = arima_model.forecast(steps=total_steps)
+        
+        # Kembalikan ke skala asli jika menggunakan Log
+        if IS_LOG_ARIMA:
+            arima_forecast = np.expm1(arima_forecast)
+        
+        # Ambil 10 nilai terakhir (sesuai range 10 hari yang diminta)
+        arima_10_days = arima_forecast.iloc[-10:].values
+        
+        # Cegah nilai negatif
+        arima_10_days = np.maximum(arima_10_days, 0.0)
+
+        # ============================
+        # --- B. Prediksi LSTM ---
+        # ============================
+        
+        # Ambil data inisial (30 hari terakhir dari training)
+        current_batch = metadata['last_sequence'].reshape(1, TIME_STEP, 1)
+        lstm_predictions_scaled = []
+
+        # Loop sebanyak total_steps untuk mendapatkan sequence sampai akhir
+        for i in range(total_steps):
+            # Prediksi 1 langkah
+            pred = lstm_model.predict(current_batch, verbose=0)
+            
+            # Simpan hasil (masih dalam skala 0-1)
+            lstm_predictions_scaled.append(pred[0][0])
+            
+            # Update batch untuk langkah berikutnya
+            current_batch = np.append(current_batch[:, 1:, :], [[pred[0]]], axis=1)
+        
+        # Ambil 10 hasil terakhir
+        lstm_10_days_scaled = np.array(lstm_predictions_scaled[-10:]).reshape(-1, 1)
+        
+        # Kembalikan ke skala asli (Rupiah)
+        lstm_10_days_real = scaler.inverse_transform(lstm_10_days_scaled)
+        
+        # Flatten array dan cegah negatif
+        lstm_10_days_final = np.maximum(lstm_10_days_real.flatten(), 0.0)
+
+        # ============================
+        # --- C. Format Output ---
+        # ============================
+        
+        results = []
+        for i in range(10):
+            # Hitung tanggal untuk hari ke-i
+            current_date = target_date + timedelta(days=i)
+            
+            val_arima = float(arima_10_days[i])
+            val_lstm = float(lstm_10_days_final[i])
+            
+            results.append({
+                "date": current_date,
+                "day_index": i + 1,
+                "ARIMA": {
+                    "value": val_arima,
+                    "formatted": f"Rp{val_arima:,.0f}".replace(",", ".")
+                },
+                "LSTM": {
+                    "value": val_lstm,
+                    "formatted": f"Rp{val_lstm:,.0f}".replace(",", ".")
+                }
+            })
+
+        return {
+            "start_date": target_date,
+            "end_date": target_date + timedelta(days=9),
+            "predictions": results
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # AUTHENTICATION
 def hash_password(password):

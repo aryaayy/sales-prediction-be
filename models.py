@@ -25,7 +25,7 @@ class Sale(Base):
     harga_jual_idr = Column(Integer, nullable=True)
     total_penjualan_idr = Column(Integer, nullable=True)
 
-    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
 
 class PredictionMetric(Base):
     __tablename__ = "prediction_metrics"

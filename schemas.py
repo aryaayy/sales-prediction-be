@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, date
 
 # USER
 class UserBase(BaseModel):
@@ -117,6 +117,9 @@ class TemporalPatternResponse(BaseModel):
         orm_mode = True
 
 # PREDICTIONS
+class DateInput(BaseModel):
+    target_date: date  # Format: YYYY-MM-DD
+
 class PredictionArgs(BaseModel):
     csv_path: str
     user_id: int
