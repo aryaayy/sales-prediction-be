@@ -58,6 +58,19 @@ def delete_user(db: Session, db_user: models.User):
 
     return {"message": "success"}
 
+# AUTH
+def get_pending_users(db: Session):
+    return db.query(models.User).filter(models.User.status_aktivasi == "PENDING").all()
+
+def activate_user(db: Session, db_user: models.User):
+
+    db_user.status_aktivasi = "ACTIVATED"
+
+    db.commit()
+    db.refresh(db_user)
+
+    return db_user
+
 # DATASET
 def get_sales(db: Session, user_id: int, limit: int, offset: int, year: str, status: str):
     if year == "all" and status == "all":

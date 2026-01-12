@@ -17,6 +17,7 @@ import os
 from dotenv import load_dotenv
 import schemas, crud, models
 from prediction import run_prediction
+# from prediction import run_prediction
 
 from datetime import datetime, timedelta, timezone
 
@@ -588,7 +589,7 @@ def predict_single_day_products(payload: schemas.DateInput, token: str = Depends
     # payload = verify_token(token)
     """
     Prediksi total penjualan pada 1 tanggal spesifik & 
-    secara otomatis menentukan Top 5 Produk terlaris hari itu.
+    Top 5 Produk (IDR) + Estimasi Qty.
     """
     try:
         if not metadata:
@@ -597,51 +598,65 @@ def predict_single_day_products(payload: schemas.DateInput, token: str = Depends
         last_train_date = pd.to_datetime(metadata['last_date']).date()
         target_date = payload.target_date
         
-        # Hitung selisih hari
+        # Validasi tanggal
         delta = (target_date - last_train_date).days
-        
         if delta < 1:
              raise HTTPException(status_code=400, detail=f"Tanggal target harus setelah {last_train_date}.")
 
         # 1. Prediksi Total Penjualan (LSTM Recursive)
-        # Menggunakan sequence terakhir dari metadata sebagai start point
         lstm_total = predict_lstm_recursive(delta, metadata['last_sequence'])
-        lstm_total = max(0.0, lstm_total) # Pastikan tidak negatif
+        lstm_total = max(0.0, lstm_total) 
 
-        # 2. Ambil Share Produk dari Metadata
-        # Dictionary ini berisi { "Nama Produk": 0.05, ... }
+        # 2. Ambil Data dari Metadata
         product_share: Dict = metadata.get('product_share', {})
+        product_prices: Dict = metadata.get('product_prices', {}) # <--- Load Harga Rata-rata
         
-        # 3. Hitung Estimasi Penjualan untuk SETIAP produk
+        # 3. Hitung Estimasi Per Produk
         all_product_allocations = []
         
         for product_name, share in product_share.items():
-            # Opsional: Skip kategori 'Lainnya' jika hanya ingin produk spesifik
             if product_name == "__Lainnya__": 
                 continue 
                 
-            # Rumus: Total Prediksi Hari Itu * Persentase Share Produk
+            # Hitung Omzet (IDR)
             estimated_sales = lstm_total * share
+            
+            # Hitung Qty (Jumlah)
+            # Ambil harga satuan, default 0 jika error
+            unit_price = product_prices.get(product_name, 0)
+            # print(f"{product_name} {unit_price}")
+            
+            estimated_qty = 0
+            if unit_price > 0:
+                # Rumus: Omzet dibagi Harga Satuan
+                # estimated_qty = int(round(estimated_sales / unit_price))
+                estimated_qty = round(estimated_sales / unit_price)
+                estimated_qty = max(estimated_qty, 1)
             
             all_product_allocations.append({
                 "product_name": product_name,
                 "estimated_sales": estimated_sales,
+                "estimated_qty": estimated_qty, # Simpan qty sementara
                 "share_percent": share * 100
             })
         
-        # 4. Sortir dari Penjualan Tertinggi ke Terendah
+        # 4. Sortir (Tertinggi ke Terendah)
         all_product_allocations.sort(key=lambda x: x['estimated_sales'], reverse=True)
         
         # 5. Ambil Top 5
         top_5_products = all_product_allocations[:5]
 
-        # 6. Format Output
+        # 6. Format Output (JANGAN UBAH KEY LAMA)
         formatted_top_5 = []
         for item in top_5_products:
             formatted_top_5.append({
+                # --- VARIABEL LAMA (JANGAN DIUBAH) ---
                 "product_name": item['product_name'],
                 "estimated_sales_idr": format_idr(item['estimated_sales']),
-                "raw_value": item['estimated_sales']
+                "raw_value": item['estimated_sales'],
+                
+                # --- VARIABEL BARU (TAMBAHAN) ---
+                "estimated_qty": item['estimated_qty'] 
             })
         
         return {
@@ -656,6 +671,79 @@ def predict_single_day_products(payload: schemas.DateInput, token: str = Depends
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+# @app.post("/api/predict/single_day")
+# def predict_single_day_products(payload: schemas.DateInput, token: str = Depends(oauth2_scheme)):
+#     # payload = verify_token(token)
+#     """
+#     Prediksi total penjualan pada 1 tanggal spesifik & 
+#     secara otomatis menentukan Top 5 Produk terlaris hari itu.
+#     """
+#     try:
+#         if not metadata:
+#             raise HTTPException(status_code=503, detail="Model belum siap (metadata not loaded).")
+
+#         last_train_date = pd.to_datetime(metadata['last_date']).date()
+#         target_date = payload.target_date
+        
+#         # Hitung selisih hari
+#         delta = (target_date - last_train_date).days
+        
+#         if delta < 1:
+#              raise HTTPException(status_code=400, detail=f"Tanggal target harus setelah {last_train_date}.")
+
+#         # 1. Prediksi Total Penjualan (LSTM Recursive)
+#         # Menggunakan sequence terakhir dari metadata sebagai start point
+#         lstm_total = predict_lstm_recursive(delta, metadata['last_sequence'])
+#         lstm_total = max(0.0, lstm_total) # Pastikan tidak negatif
+
+#         # 2. Ambil Share Produk dari Metadata
+#         # Dictionary ini berisi { "Nama Produk": 0.05, ... }
+#         product_share: Dict = metadata.get('product_share', {})
+        
+#         # 3. Hitung Estimasi Penjualan untuk SETIAP produk
+#         all_product_allocations = []
+        
+#         for product_name, share in product_share.items():
+#             # Opsional: Skip kategori 'Lainnya' jika hanya ingin produk spesifik
+#             if product_name == "__Lainnya__": 
+#                 continue 
+                
+#             # Rumus: Total Prediksi Hari Itu * Persentase Share Produk
+#             estimated_sales = lstm_total * share
+            
+#             all_product_allocations.append({
+#                 "product_name": product_name,
+#                 "estimated_sales": estimated_sales,
+#                 "share_percent": share * 100
+#             })
+        
+#         # 4. Sortir dari Penjualan Tertinggi ke Terendah
+#         all_product_allocations.sort(key=lambda x: x['estimated_sales'], reverse=True)
+        
+#         # 5. Ambil Top 5
+#         top_5_products = all_product_allocations[:5]
+
+#         # 6. Format Output
+#         formatted_top_5 = []
+#         for item in top_5_products:
+#             formatted_top_5.append({
+#                 "product_name": item['product_name'],
+#                 "estimated_sales_idr": format_idr(item['estimated_sales']),
+#                 "raw_value": item['estimated_sales']
+#             })
+        
+#         return {
+#             "date": target_date,
+#             "days_ahead": delta,
+#             "prediction_summary": {
+#                 "total_sales_forecast": format_idr(lstm_total),
+#                 "model_used": "LSTM Recursive"
+#             },
+#             "top_5_products": formatted_top_5
+#         }
+
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 # ==========================================
 # ENDPOINT 2: Compare Last 10 Days (Actual vs Predicted)
@@ -824,9 +912,27 @@ def predict_sales_7_days(payload: schemas.DateInput):
             # Hitung tanggal untuk hari ke-i
             current_date = target_date + timedelta(days=i)
             
-            val_arima = float(arima_10_days[i])
-            val_lstm = float(lstm_10_days_final[i])
+            # Ambil nilai raw
+            raw_arima = arima_10_days[i]
+            raw_lstm = lstm_10_days_final[i]
+
+            # --- SANITIZATION (PERBAIKAN ERROR JSON) ---
+            # Cek apakah NaN atau Infinity, jika ya ubah jadi 0.0
             
+            # Sanitasi ARIMA
+            if np.isnan(raw_arima) or np.isinf(raw_arima):
+                val_arima = 0.0
+            else:
+                val_arima = float(raw_arima)
+
+            # Sanitasi LSTM
+            if np.isnan(raw_lstm) or np.isinf(raw_lstm):
+                val_lstm = 0.0
+            else:
+                val_lstm = float(raw_lstm)
+            
+            # --- END SANITIZATION ---
+
             results.append({
                 "date": current_date,
                 "day_index": i + 1,
@@ -847,6 +953,8 @@ def predict_sales_7_days(payload: schemas.DateInput):
         }
 
     except Exception as e:
+        # Print error di terminal agar mudah debug
+        print(f"Error during prediction: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # AUTHENTICATION
@@ -858,6 +966,9 @@ def hash_password(password):
 def authenticate(credentials: schemas.UserLogin, conn: Session):
     user = crud.get_user_by_email(conn, credentials.email)
     if user:
+        if user.status_aktivasi == "PENDING":
+            raise HTTPException(401, "Akun belum teraktivasi!")
+
         return hash_password(credentials.password) == user.password
     else:
         return False
@@ -878,7 +989,7 @@ def verify_token(token: str):
     except JWTError:
         raise HTTPException(401, "Invalid Access Token")
 
-@app.post("/token", tags=["Token"], response_model=schemas.Token)
+@app.post("/token", tags=["Auth"], response_model=schemas.Token)
 async def token(form_data: OAuth2PasswordRequestForm = Depends(), conn: Session = Depends(get_db)):
     credentials = schemas.UserLogin(
         email=form_data.username,
@@ -894,3 +1005,39 @@ async def token(form_data: OAuth2PasswordRequestForm = Depends(), conn: Session 
         access_token=access_token,
         token_type="bearer"
     )
+
+@app.get("/api/auth/pending-users/{user_id}", tags=["Auth"], response_model=list[schemas.UserAktivasi])
+async def pending_users(user_id: int, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    if crud.get_user_by_id(conn, user_id).role != "OWNER":
+        raise HTTPException(401, "Unauthorized access!")
+    
+    result = crud.get_pending_users(conn)
+    users: schemas.UserAktivasi = []
+
+    for user in result:
+        users.append(
+            schemas.UserAktivasi(
+                user_id=user.user_id,
+                email=user.email,
+                nama_lengkap=user.nama_lengkap,
+                role=user.role,
+                status_aktivasi=user.status_aktivasi
+            )
+        )
+
+    return users
+
+@app.put("/api/auth/update-activation-status/{current_user_id}", tags=["Auth"])
+async def pending_users(current_user_id: int, body: schemas.UserAktivasiEdit, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    if crud.get_user_by_id(conn, current_user_id).role != "OWNER":
+        raise HTTPException(401, "Unauthorized access!")
+    
+    target_user = crud.get_user_by_id(conn, body.user_id)
+
+    if not body.approve:
+        crud.delete_user(conn, target_user)
+        return {"status": "success", "message": "berhasil menolak aktivasi akun"}
+
+    result = crud.activate_user(conn, target_user)
+
+    return {"status": "success", "message": "berhasil aktivasi akun"}

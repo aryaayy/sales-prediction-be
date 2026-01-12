@@ -23,12 +23,25 @@ class UserEdit(UserBase):
     nama_toko: str
     role: str
 
+class UserAktivasiEdit(BaseModel):
+    user_id: int
+    approve: bool
+
 class UserResponse(UserBase):
     user_id: int
     nama_lengkap: str
     nama_toko: str
     role: str
     csv_path: Optional[str]
+
+    class Config:
+        orm_mode = True
+
+class UserAktivasi(UserBase):
+    nama_lengkap: str
+    role: str
+    status_aktivasi: str
+    user_id: int
 
     class Config:
         orm_mode = True

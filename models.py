@@ -11,6 +11,7 @@ class User(Base):
     nama_lengkap = Column(String(255), nullable=False)
     nama_toko = Column(String(255), nullable=False, default="")
     role = Column(String(50), nullable=False)
+    status_aktivasi = Column(String(50), nullable=False, default="PENDING")
     csv_path = Column(String(255), nullable=False, default="")
 
 class Sale(Base):
