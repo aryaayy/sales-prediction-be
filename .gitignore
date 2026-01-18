@@ -2,5 +2,7 @@ __pycache__/
 .env
 test.ipynb
 model/
+models/produk_terjual.csv
+models/produk_terjual_per_hari.csv
 uploads/
 archives/

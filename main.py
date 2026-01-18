@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, BackgroundTasks, status
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, Form, File, BackgroundTasks, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 
@@ -156,11 +156,78 @@ def hash_path(path: str) -> str:
     return safe_hash
 
 # DATASET
+# @app.post("/api/sales/upload", tags=["Dataset"], response_model=schemas.UserResponse)
+# async def upload_sales(file: UploadFile = File(...), conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+#     payload = verify_token(token)
+#     user = crud.get_user_by_email(conn, payload["email"])
+#     prev_csv = os.path.join(UPLOAD_DIR, user.csv_path)
+
+#     if not file.filename.endswith(".csv"):
+#         raise HTTPException(400, detail="File format not supported")
+    
+#     os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+#     try:
+#         csv_path = hash_path(f"user_id{user.user_id}_{file.filename}")
+#         csv_path += ".csv"
+
+#         with open(os.path.join(UPLOAD_DIR, csv_path), "wb") as f:
+#             contents = await file.read()
+#             f.write(contents)
+
+#         user.csv_path = csv_path
+
+#         conn.commit()
+#         conn.refresh(user)
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+
+#     try:
+#         df = pd.read_csv(StringIO(contents.decode("utf-8")))
+#     except Exception as e:
+#         raise HTTPException(400, detail=f"Failed reading file: {str(e)}")
+    
+#     df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace("[()]", "", regex=True)
+#     df = df.replace({np.nan: None, pd.NaT: None})
+#     df = df.dropna(how="all")
+
+#     df["tanggal_pembayaran"] = pd.to_datetime(df["tanggal_pembayaran"], errors="coerce")
+#     df["user_id"] = user.user_id
+
+#     try:
+#         crud.delete_sales(conn, user.user_id)
+#         records = df.to_dict(orient="records")
+#         conn.bulk_insert_mappings(models.Sale, records)
+#         conn.commit()
+#         if prev_csv != f"{UPLOAD_DIR}None" and prev_csv != UPLOAD_DIR and os.path.exists(prev_csv):
+#             os.remove(prev_csv)
+#     except Exception as e:
+#         conn.rollback()
+#         raise HTTPException(500, detail=f"Database insertion failed: {str(e)}")
+    
+#     return schemas.UserResponse(
+#         user_id=user.user_id,
+#         email=user.email,
+#         nama_lengkap=user.nama_lengkap,
+#         nama_toko=user.nama_toko,
+#         role=user.role,
+#         csv_path=user.csv_path
+#     )
+
 @app.post("/api/sales/upload", tags=["Dataset"], response_model=schemas.UserResponse)
-async def upload_sales(file: UploadFile = File(...), conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+async def upload_sales(
+    file: UploadFile = File(...), 
+    mode: str = Form(...),  # <--- TAMBAHAN: Menerima input mode ('replace' atau 'append')
+    conn: Session = Depends(get_db), 
+    token: str = Depends(oauth2_scheme)
+):
     payload = verify_token(token)
     user = crud.get_user_by_email(conn, payload["email"])
-    prev_csv = os.path.join(UPLOAD_DIR, user.csv_path)
+    
+    # Simpan path file lama
+    prev_csv_path = None
+    if user.csv_path:
+        prev_csv_path = os.path.join(UPLOAD_DIR, user.csv_path)
 
     if not file.filename.endswith(".csv"):
         raise HTTPException(400, detail="File format not supported")
@@ -168,25 +235,71 @@ async def upload_sales(file: UploadFile = File(...), conn: Session = Depends(get
     os.makedirs(UPLOAD_DIR, exist_ok=True)
 
     try:
-        csv_path = hash_path(f"user_id{user.user_id}_{file.filename}")
-        csv_path += ".csv"
+        contents = await file.read()
+    except Exception as e:
+        raise HTTPException(400, detail=f"Failed to read uploaded file: {str(e)}")
 
-        with open(os.path.join(UPLOAD_DIR, csv_path), "wb") as f:
-            contents = await file.read()
-            f.write(contents)
+    # LOGIKA UTAMA (Sesuai Mode yang dipilih di Frontend)
+    try:
+        # Cek apakah file lama ada
+        file_exists = prev_csv_path and os.path.exists(prev_csv_path)
 
-        user.csv_path = csv_path
+        # KONDISI APPEND:
+        # Hanya append jika mode 'append' DAN file fisiknya ada
+        if mode == 'append' and file_exists:
+            # --- MODE APPEND ---
+            full_path = prev_csv_path
+            
+            try:
+                # Cari baris baru pertama (akhir header) untuk membuang header data baru
+                header_end_index = contents.index(b'\n')
+                data_to_append = contents[header_end_index + 1:]
+                
+                if data_to_append:
+                    with open(full_path, "ab") as f:
+                        f.write(data_to_append)
+            except ValueError:
+                pass # Error jika file kosong/cuma header
+
+        else:
+            # --- MODE REPLACE / CREATE NEW ---
+            # Jika mode 'replace' ATAU file belum ada -> Kita timpa/buat baru
+            
+            # Jika user minta replace tapi pakai nama file yang sama, kita generate hash baru biar bersih
+            # atau overwrite hash lama juga boleh. Di sini kita buat hash baru.
+            new_csv_name = hash_path(f"user_id{user.user_id}_{file.filename}") + ".csv"
+            full_path = os.path.join(UPLOAD_DIR, new_csv_name)
+
+            with open(full_path, "wb") as f:
+                f.write(contents)
+            
+            # Update path user
+            user.csv_path = new_csv_name
+            
+            # Jika ini REPLACE, kita harus pastikan Database juga bersih?
+            # Note: Kode di bawah hanya insert. Jika mode 'replace', 
+            # idealnya Anda menghapus data lama di DB juga sebelum insert baru.
+            if mode == 'replace':
+                # HAPUS DATA LAMA DI DB UNTUK USER INI (Opsional, tapi disarankan untuk 'Rewrite')
+                crud.delete_sales(conn, user.user_id)
+                
+                # Jika file fisik lama berbeda nama dengan yang baru, hapus file lama
+                if file_exists and prev_csv_path != full_path:
+                    os.remove(prev_csv_path)
 
         conn.commit()
         conn.refresh(user)
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
+    # LOGIKA DATABASE INSERTION
     try:
         df = pd.read_csv(StringIO(contents.decode("utf-8")))
     except Exception as e:
-        raise HTTPException(400, detail=f"Failed reading file: {str(e)}")
+        raise HTTPException(400, detail=f"Failed reading file content: {str(e)}")
     
+    # Cleaning Data
     df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace("[()]", "", regex=True)
     df = df.replace({np.nan: None, pd.NaT: None})
     df = df.dropna(how="all")
@@ -195,12 +308,10 @@ async def upload_sales(file: UploadFile = File(...), conn: Session = Depends(get
     df["user_id"] = user.user_id
 
     try:
-        crud.delete_sales(conn, user.user_id)
         records = df.to_dict(orient="records")
         conn.bulk_insert_mappings(models.Sale, records)
         conn.commit()
-        if prev_csv != f"{UPLOAD_DIR}None" and prev_csv != UPLOAD_DIR and os.path.exists(prev_csv):
-            os.remove(prev_csv)
+
     except Exception as e:
         conn.rollback()
         raise HTTPException(500, detail=f"Database insertion failed: {str(e)}")
@@ -396,6 +507,11 @@ def get_job(user_id: int, conn: Session = Depends(get_db)):
         )
 
     return result
+
+@app.get("/api/predictions/status/{user_id}", tags=["Predictions"])
+async def my_prediction_status(user_id: int, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme), job = Depends(get_job)):
+    payload = verify_token(token)
+    return get_job(user_id, conn)
 
 @app.get("/api/predictions/metrics/{user_id}", tags=["Predictions"])
 async def my_prediction_metrics(user_id: int, conn: Session = Depends(get_db), token: str = Depends(oauth2_scheme), job = Depends(get_job)):
